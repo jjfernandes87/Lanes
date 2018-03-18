@@ -1,0 +1,202 @@
+# def proj 
+# 	{
+# 		plist: "./PATH_TO_PROJECT/Info.plist",
+# 		xcodeproj: "./PATH_TO_PROJECT.xcodeproj/"
+# 		repo_url: "https://github.com/MyTeam/fastlane",
+#     scheme: "MyProject"
+#     scheme_prod: "MyProject-Prod",
+#     app_identifier_for_qa: "my.company.app.beta",
+#     fabric_testers: "MyProject-Prod"
+# 	}
+
+# def cocoapods 
+# 	{
+# 		private_repo: "my_private_repo",
+#     private_repo_name: "my_private_repo",
+# 		private_repo_git_url: "git@github.com:MyTeam/my_private_repo.git",
+# 		podspec: "./MyPod.podspec",
+#		  pod_name: "MyPod"
+# 	}
+
+#---------------------------------- Update version number ----------------------------------#
+
+def get_version_short_string
+  if (proj[:plist] == nil)
+    raise "Your fastlane File is missing a plist variable: proj[:plist] = './PATH_TO_PROJECT/Info.plist' ".red
+  end
+  get_info_plist_value(path: proj[:plist], key: 'CFBundleShortVersionString')
+end
+
+desc "Change version number with prompt"
+lane :change_version_number do
+  number = prompt(text: 'Version number: ')
+  version_number = update_version_number_and_commit(number:number)
+  version_number
+end
+
+desc "Increment Patch version"
+lane :patch do 
+  version_number = update_version_number_and_commit(bump_type:"patch")
+  version_number
+end
+
+desc "Increment minor version"
+lane :minor do 
+  version_number = update_version_number_and_commit(bump_type:"minor")
+  version_number
+end  
+
+desc "Increment major version"
+lane :major do 
+  version_number = update_version_number_and_commit(bump_type:"major")
+  version_number
+end
+
+private_lane :update_version_number_and_commit do |options|
+  ensure_git_status_clean
+  new_version_number = options[:number]
+  bump_type = options[:bump_type]
+  if (proj[:xcodeproj] == nil)
+    raise "Your fastlane File is missing a xcodeproj variable: proj[:xcodeproj] = './PATH_TO_PROJECT.xcodeproj/' ".red
+  end
+  if proj[:xcodeproj]
+    if new_version_number
+      increment_version_number(version_number: new_version_number,
+        xcodeproj: proj[:xcodeproj])
+    elsif bump_type
+      increment_version_number(bump_type: bump_type,xcodeproj: proj[:xcodeproj])
+    else
+      increment_version_number(xcodeproj: proj[:xcodeproj])
+    end
+    version_number = get_version_short_string
+    sh "git commit -am \"Change version number: #{version_number} \" "
+    version_number
+  end
+end
+
+
+#---------------------------------- Update build number ----------------------------------#
+
+desc "bump build version and commit"
+
+lane :bump do    
+  increment_build_number
+  build_number = lane_context[SharedValues::BUILD_NUMBER]
+  sh "git commit -am \"Build version bump: #{build_number} [ci skip]\""
+  build_number
+end
+
+
+#----------------------- Create Pull Request from the current branch  ---------------------#
+
+desc "Create a pull request from the current branch"
+lane :pr do |options|
+  ok = system("which hub > /dev/null 2>&1")
+  if (ok == false)
+    raise "Please install https://github.com/github/hub".yellow
+  end
+  ensure_git_status_clean
+  branch = git_branch
+  if (branch == "master") ||(branch == "develop")
+    raise "You can't open a Pull Request from this branch".yellow
+  else
+    UI.success "it is ok you are on branch :#{branch}".green
+    sh "git push origin #{branch}"
+  end
+  pr_title = prompt(text: 'Type pull request title:')
+  sh "hub issue"
+  desc = prompt(text: 'Do you want add a description? It\'s always better :).',boolean:true)
+  prompt_text = "Type pull request description: Fixing any issues? Just write: fixed #issueNumber. "
+  pr_description = desc ? prompt(text: prompt_text) : ""
+  sh "touch pr_file"
+  write = open('pr_file', 'w')
+  write.write(pr_title)
+  write.write("\n")
+  write.write(pr_description)
+  write.close
+
+  base = proj[:default_branch] if defined? proj[:default_branch] 
+  base = options[:base] if options[:base]
+  if base 
+    pr_link = sh "hub pull-request -F pr_file -b #{base}"
+  else 
+    pr_link = sh "hub pull-request -F pr_file"
+  end
+
+  sh "rm pr_file"
+  clipboard(value:pr_link)
+  slack(
+    message: "PR opened on #{proj[:repo_url]}",
+    payload: {
+      'title' => pr_title,
+      'link' => pr_link
+      })
+end
+
+#---------------------------- Tag version for App Store Release --------------------------#
+
+desc "Tag the current repo status for App Store Release"
+lane :tag_the_release do
+  build_number = get_build_number
+  version_number = get_version_short_string
+  time = Time.now
+  sh "git tag -a #{version_number}_#{build_number} -m \"Version #{version_number}_#{build_number} submitted to the App Store - #{time.strftime("%d %b %Y")}\""
+end
+
+#---------------------------------- Cocoapods helpers ----------------------------------#
+
+lane :install_private_repo do
+  pod_repo_is_installed = sh "bundle exec pod repo | grep #{cocoapods[:private_repo_name]} | wc -l"
+  pod_repo_is_installed = pod_repo_is_installed.to_i
+  line_to_compare = 1
+  if (pod_repo_is_installed <= line_to_compare)
+    sh "bundle exec pod repo add #{cocoapods[:private_repo_name]} #{cocoapods[:private_repo_git_url]}"
+  end
+end
+
+lane :publish_pod do
+ ensure_git_status_clean
+ install_private_repo
+ sh "bundle exec pod repo push #{cocoapods[:private_repo_name]} .#{cocoapods[:podspec]} --sources='#{cocoapods[:private_repo_git_url]},https://github.com/CocoaPods/Specs.git' --allow-warnings"
+end
+
+lane :lint_pod do
+ install_private_repo
+ sh "bundle exec pod spec lint .#{cocoapods[:podspec]} --sources='#{cocoapods[:private_repo_git_url]},https://github.com/CocoaPods/Specs.git' --allow-warnings --quick"
+end
+
+desc "Create a new tag and publish the new pod you can pass : force"
+lane :tag_and_pod do |options|   
+  install_private_repo
+  ensure_git_status_clean
+  sh "git fetch --tags"
+  last_tag = last_git_tag
+  version_number = get_info_plist_value(path: proj[:plist], key: 'CFBundleShortVersionString')
+  if (Gem::Version.new(last_tag) >= Gem::Version.new(version_number))
+    if options[:force] 
+      version_number = patch
+    else
+      raise "There is already a tag with this number version. If you want to force create a tag do: fastlane tag force:true \nYou should first update the version number with : fastlane patch | fastlane minor | fastlane major".yellow
+    end
+  else
+    UI.success "it is ok, all good! #{last_tag} != #{version_number}💪".green
+  end
+  change_log = sh "git log #{last_tag}..HEAD --pretty=format:\"* %s - %an\""
+  readme = File.read(changelogFile)
+  write = open(changelogFile, 'w')
+  write.write("##  ")
+  write.write(version_number)
+  write.write("\n")
+  write.write(change_log)
+  write.write("\n")
+  write.write("\n")
+  write.write(readme)
+  write.close
+
+  version_bump_podspec(path: "#{cocoapods[:podspec]}", version_number: version_number)
+  sh "git commit -am \"Publish pod version: #{version_number} [ci skip]\""
+  add_git_tag(tag: version_number)
+  push_git_tags
+  push_to_git_remote
+  publish_pod
+end
