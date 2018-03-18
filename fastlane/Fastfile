@@ -125,12 +125,6 @@ lane :pr do |options|
 
   sh "rm pr_file"
   clipboard(value:pr_link)
-  slack(
-    message: "PR opened on #{proj[:repo_url]}",
-    payload: {
-      'title' => pr_title,
-      'link' => pr_link
-      })
 end
 
 #---------------------------- Tag version for App Store Release --------------------------#
