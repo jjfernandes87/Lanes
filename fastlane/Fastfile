@@ -91,18 +91,22 @@ end
 
 desc "Create a pull request from the current branch"
 lane :pr do |options|
+  
   ok = system("which hub > /dev/null 2>&1")
   if (ok == false)
     raise "Please install https://github.com/github/hub".yellow
   end
+  
   ensure_git_status_clean
   branch = git_branch
+  
   if (branch == "master") ||(branch == "develop")
     raise "You can't open a Pull Request from this branch".yellow
   else
     UI.success "it is ok you are on branch :#{branch}".green
     sh "git push origin #{branch}"
   end
+  
   pr_title = prompt(text: 'Type pull request title:')
   sh "hub issue"
   desc = prompt(text: 'Do you want add a description? It\'s always better :).',boolean:true)
@@ -117,6 +121,7 @@ lane :pr do |options|
 
   base = proj[:default_branch] if defined? proj[:default_branch] 
   base = options[:base] if options[:base]
+  
   if base 
     pr_link = sh "hub pull-request -F pr_file -b #{base}"
   else 
@@ -139,33 +144,23 @@ end
 
 #---------------------------------- Cocoapods helpers ----------------------------------#
 
-lane :install_private_repo do
-  pod_repo_is_installed = sh "bundle exec pod repo | grep #{cocoapods[:private_repo_name]} | wc -l"
-  pod_repo_is_installed = pod_repo_is_installed.to_i
-  line_to_compare = 1
-  if (pod_repo_is_installed <= line_to_compare)
-    sh "bundle exec pod repo add #{cocoapods[:private_repo_name]} #{cocoapods[:private_repo_git_url]}"
-  end
-end
-
 lane :publish_pod do
  ensure_git_status_clean
- install_private_repo
- sh "bundle exec pod repo push #{cocoapods[:private_repo_name]} .#{cocoapods[:podspec]} --sources='#{cocoapods[:private_repo_git_url]},https://github.com/CocoaPods/Specs.git' --allow-warnings"
+ sh "bundle exec pod trunk push .#{cocoapods[:podspec]} --allow-warnings"
 end
 
 lane :lint_pod do
- install_private_repo
- sh "bundle exec pod spec lint .#{cocoapods[:podspec]} --sources='#{cocoapods[:private_repo_git_url]},https://github.com/CocoaPods/Specs.git' --allow-warnings --quick"
+ sh "bundle exec pod lib lint --allow-warnings --quick"
 end
 
 desc "Create a new tag and publish the new pod you can pass : force"
 lane :tag_and_pod do |options|   
-  install_private_repo
+  
   ensure_git_status_clean
   sh "git fetch --tags"
   last_tag = last_git_tag
   version_number = get_info_plist_value(path: proj[:plist], key: 'CFBundleShortVersionString')
+  
   if (Gem::Version.new(last_tag) >= Gem::Version.new(version_number))
     if options[:force] 
       version_number = patch
@@ -175,6 +170,7 @@ lane :tag_and_pod do |options|
   else
     UI.success "it is ok, all good! #{last_tag} != #{version_number}💪".green
   end
+  
   change_log = sh "git log #{last_tag}..HEAD --pretty=format:\"* %s - %an\""
   readme = File.read(changelogFile)
   write = open(changelogFile, 'w')
@@ -193,4 +189,5 @@ lane :tag_and_pod do |options|
   push_git_tags
   push_to_git_remote
   publish_pod
+
 end
