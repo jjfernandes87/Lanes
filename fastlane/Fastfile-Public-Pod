@@ -18,6 +18,15 @@
 #		  pod_name: "MyPod"
 # 	}
 
+#---------------------------------- Test version ----------------------------------#
+
+desc "Test pod"
+lane :test do
+  scheme = proj[:scheme]
+  workspace = proj[:workspace]
+  scan(clean: true, code_coverage: true, scheme: "#{scheme}", workspace: "#{workspace}")
+end
+
 #---------------------------------- Update version number ----------------------------------#
 
 def get_version_short_string
